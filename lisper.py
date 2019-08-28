@@ -22,28 +22,6 @@ def is_valid_symbol_char(c):
     return c in VALID_SYMBOL_CHARS
 
 
-def is_alpha(c):
-    '''
-    Is this in the range of a-z?
-
-    :param c - a string of length 1 (a char)
-
-    :return - a boolean
-    '''
-    return c >= 'a' and c <= 'z'
-
-
-def is_num(c):
-    '''
-    Is this a numerica character?
-
-    :param c - a string of length 1 (a char)
-
-    :return - a boolean
-    '''
-    return c >= '0' and c <= '9'
-
-
 def is_valid_symbol(c):
     '''
     Is this character valid for symbols?
@@ -52,18 +30,7 @@ def is_valid_symbol(c):
 
     :return - a boolean
     '''
-    return is_alpha(c) or is_num(c) or is_valid_symbol_char(c)
-
-
-def is_whitespace(c):
-    '''
-    Is this a space, a newline, a tab or a return character?
-
-    :param c - a string of length 1 (a char)
-
-    :return - a boolean
-    '''
-    return c == ' ' or c == '\n' or c == '\t' or c == '\r'
+    return c.isalpha() or c.isdigit() or is_valid_symbol_char(c)
 
 
 class Stream:
@@ -164,7 +131,7 @@ class Tokenizer(Stream):
         is_int = True
         error = False
 
-        while is_num(self.current()) or self.current() == '.':
+        while self.current().isdigit() or self.current() == '.':
             if self.current() == '.':
                 if is_int:
                     is_int = False
@@ -204,14 +171,14 @@ class Tokenizer(Stream):
             elif c == ')':
                 tokens.append(Token('RPAREN'))
                 self.consume(1)
-            elif is_valid_symbol(c) and not is_num(c):
+            elif is_valid_symbol(c) and not c.isdigit():
                 tokens.append(Token('SYMBOL', self.consume_symbol()))
-            elif is_num(c):
+            elif c.isdigit():
                 num, is_int = self.consume_number()
                 tokens.append(Token('NUMBER', num, int=is_int))
             elif c == ';':
                 self.consume_comment()
-            elif is_whitespace(c):
+            elif c.isspace():
                 self.consume(1)
             else:
                 raise SyntaxError('Unexpected character "%s"' % c)
