@@ -3,11 +3,6 @@
 ; define the square of x
 (define square
     (lambda (x) (* x x)))
-(define abs
-    (lambda (x)
-            (if (< x 0)
-                (- x)
-                x)))
 
 ; define the average between x and y
 (define average
@@ -22,7 +17,7 @@
 ; check if the guess is good enough
 (define good-enough?
     (lambda (guess x)
-            (< (abs (- (square guess) x))
+            (< (py/abs (- (square guess) x))
             0.00000001)))
 
 ; try a guess
@@ -37,4 +32,5 @@
 (define sqrt (lambda (x) (try 1 x)))
 
 ; test
-(sqrt 2.0)
+(py/print (sqrt 2.0))
+(py/print (py/isinstance 2.0 py/float))

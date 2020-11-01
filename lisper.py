@@ -7,7 +7,7 @@ import getopt
 # Defines a set of valid non-alphanumeric characters
 # for symbols. It's a constant in order to be a O(1)
 # query evertime the lexer looks for it.
-VALID_SYMBOL_CHARS = set('!-?+/*<>=')
+VALID_SYMBOL_CHARS = set('!-?+/*<>=._')
 
 
 def is_valid_symbol_char(c):
@@ -270,14 +270,13 @@ class Parser(Stream):
                   type - either 'int' or 'float'
                   value - the parsed value (float or int)
         '''
-        if self.current().meta['int']:
-            value = int(self.current().value)
-            type = 'int'
-        else:
-            value = float(self.current().value)
-            type = 'float'
-        
-        return Node('literal', value)
+
+        value = self.current().value
+
+        if value.find('.') >= 0:
+            return float(value)
+
+        return int(value)
 
     def parse_expression(self):
         '''
@@ -290,16 +289,16 @@ class Parser(Stream):
         while True:
             if self.finished():
                 raise SyntaxError('Unexpected end of expression')
-            
+
             if self.current().type == 'SYMBOL':
-                expression.append(Node('reference', self.current().value))
+                expression.append(Symbol(self.current().value))
                 self.consume(1)
             elif self.current().type == 'NUMBER':
                 expression.append(self.parse_number())
                 self.consume(1)
             elif self.current().type == 'RPAREN':
                 self.consume(1)
-                return Node('expression', expression)
+                return expression
             elif self.current().type == 'LPAREN':
                 self.consume(1)
                 expression.append(self.parse_expression())
@@ -324,331 +323,106 @@ class Parser(Stream):
         return Program(nodes)
 
 
-class Scope:
-    '''
-    Defines the runtime scope, you can add to other scope
-    objects and dicts to get new ones and have local scopes.
+class Symbol:
+    def __init__(self, name):
+        self.name = name
 
-    :param **kwargs - scope initial definition
-    '''
-    def __init__(self, **kwargs):
-        self.state = kwargs
+    def __str__(self):
+        return str(self.name)
 
-    def get(self, name):
-        '''
-        Get the value of something in the scope
-
-        :param name - the name of the reference on the scope
-        '''
-        if name not in self.state:
-            raise Exception('%s not in scope' % name)
-
-        return self.state[name]
-
-    def set(self, name, value):
-        '''
-        Set the value of something on the scope
-
-        :param name - the name of the reference
-        :param value - the value of that reference
-        '''
-        self.state[name] = value
-
-    def __add__(self, y):
-        '''
-        Add new state the current scope and return a new one
-        updated.
-
-        :param y - new scope to be added.
-
-        :return - a new scope
-        '''
-        x = self.state.copy()
-
-        if isinstance(y, Scope):
-            x.update(y.state)
-        else:
-            x.update(y)
-
-        return Scope(**x)
+    def __repr__(self):
+        return '\'' + str(self)
 
 
-class VM:
-    '''
-    The program runtime, which is responsible for evaluating the program
-    too.
+class RT:
+    def __init__(self):
+        self.vars = {
+            'define': self.define,
+            'lambda': self.lambda_,
+        }
 
-    :param scope - the initial scope of the runtime.
-    '''
-    def __init__(self, scope, print_i=False):
-        self.scope = Scope(**scope)
-        self.current_runtime_value = None
-        self.print_i = print_i
-    
-    def build_scope(self, scope):
-        '''
-        Build a new scope merging with the current one
-
-        :param scope - a Scope object or a dict
-
-        :return - a new Scope object
-        '''
-        local = self.scope
-        if scope is not None:
-            local += scope
-        
-        return local
-
-    def eval(self, node, scope=None):
-        '''
-        Eval something, it can be a Program or a Node object.
-
-        :param node - an evaluable object (Program or Node).
-        :param scope - the scope to evaluate the node on.
-
-        :return - the value of the evaluated node.
-        '''
-        local = self.build_scope(scope)
-
+    def eval(self, node, scope={}):
         if isinstance(node, Program):
             for n in node.nodes:
-                self.current_runtime_value = self.eval(n)
-            
-            value = self.current_runtime_value
-        elif node.type == 'expression':
-            value = self.eval_expression(node, local)
-        elif node.type == 'literal':
-            value = node.value
-        elif node.type == 'reference':
-            value = local.get(node.value)
+                self.eval(n)
+
+            return
+
+        if isinstance(node, list):
+            return self.eval_call(node, scope)
+
+        if isinstance(node, Symbol):
+            return self.var(str(node), scope)
+
+        return node
+
+    def eval_args(self, args, scope):
+        return list(map(lambda x: self.eval(x, scope), args))
+
+    def eval_call(self, node, scope):
+        call_name = node[0]
+
+        if isinstance(call_name, Symbol):
+            if str(call_name).startswith('.'):
+                value = self.eval(node[1], scope)
+                fn = getattr(value, str(call_name)[1:])
+
+                return fn(*self.eval_args(node[2:], scope))
+            elif str(call_name) == 'lambda':
+                return self.lambda_(node, scope)
+            elif str(call_name) == 'define':
+                return self.define(node, scope)
+            elif str(call_name) == 'if':
+                return self.if_(node, scope)
+            else:
+                fn = self.var(call_name, scope)
         else:
-            raise SyntaxError('unkown error:' + str(node))
-        
-        if self.print_i:
-            print(value)
+            fn = self.eval(call_name, scope)
+
+        return fn(*self.eval_args(node[1:], scope))
+
+    def var(self, name, scope):
+        if str(name).startswith('py/'):
+            return getattr(__builtins__, str(name)[3:])
+
+        if scope.get(str(name), None) is not None:
+            return scope[str(name)]
+
+        return self.vars[str(name)]
+
+    def define(self, node, scope):
+        name = str(node[1])
+        value = self.eval(node[2], scope)
+
+        self.vars[name] = value
 
         return value
-    
-    def eval_expression(self, node, scope=None):
-        '''
-        Evaluate a Node of type expression
-        '''
-        expression = node.value
-        f = self.scope.get(expression[0].value)
-        args = []
 
-        if not callable(f):
-            raise RuntimeError('Operator must be a function')
-        
-        for i, arg in enumerate(expression[1:]):
-            meta = f.meta['args'].get(i, {})
-            
-            if not meta.get('evaluate', True):
-                args.append(arg)
-            else:
-                args.append(self.eval(arg, scope))
-        
-        return f(*args, scope=scope)
+    def lambda_(self, node, scope):
+        names = list(map(str, node[1]))
+        forms = node[2:]
 
+        def fn(*args):
+            local_scope = dict(zip(names, args), **scope)
 
-def meta(m=[]):
-    '''
-    Defines a function metadata to be used in the runtime
-    '''
-    def f(func):
-        func.meta = {
-            'args': dict(m)
-        }
-        return func
-    return f
+            value = None
 
+            for form in forms:
+                value = self.eval(form, local_scope)
 
-@meta([
-    (0, { 'evaluate': False })
-])
-def define(name, value, scope):
-    '''
-    The `define` operator of Lisp. Set a value on the scope.
+            return value
 
-    (define <name> <value>)
-    '''
-    scope.set(name.value, value)
-    return name
+        return fn
 
+    def if_(self, node, scope):
+        predicate = node[1]
+        affirmative = node[2]
+        negative = node[3]
 
-@meta()
-def sum(*args, **kwargs):
-    '''
-    The + operator of Lisp. Sums a bunch of numbers.
-
-    (+ <x> <y> <z> ...)
-    '''
-    return __builtins__.sum(args)
-
-
-@meta()
-def sub(*args, **kwargs):
-    '''
-    The - operator of Listp. Substracts a bunch of numbers.
-
-    (- <x> <y> <z> ...)
-    '''
-    if len(args) == 0:
-        return 0
-    
-    value = args[0]
-
-    if len(args) == 1:
-        return -value
-
-    for i in args[1:]:
-        value -= i
-    
-    return value
-
-
-@meta()
-def mul(x, y, *args, **kwargs):
-    '''
-    The * operator of Lisp. Multiplies a bunch of numbers.
-
-    (* <x> <y> <z> ...)
-    '''
-    value = x * y
-
-    for i in args:
-        value *= i
-    
-    return value
-
-
-@meta()
-def div(x, y, *args, **kwargs):
-    '''
-    The / operator of Lisp. Divides a bunch of numbers.
-
-    (/ <x> <y> <z> ...)
-    '''
-    value = x / y
-
-    for i in args:
-        value /= i
-    
-    return value
-
-
-@meta()
-def greater_than(x, y, **kwargs):
-    '''
-    The > operator of Lisp. Says if something is greater than something else.
-
-    (> <x> <y>)
-    '''
-    return x > y
-
-
-@meta()
-def greater_than_eq(x, y, **kwargs):
-    '''
-    The >= operator of Lisp. Says if something is greater than or equal something else.
-
-    (>= <x> <y>)
-    '''
-    return x >= y
-
-
-@meta()
-def eq(x, y, **kwargs):
-    '''
-    The = Operator of Lisp. Says if something is equal to something else.
-
-    (= <x> <y>)
-    '''
-    return x == y
-
-
-@meta()
-def lesser_than(x, y, **kwargs):
-    '''
-    The < operator of Lisp. Says if something is less than something else.
-
-    (< <x> <y>)
-    '''
-    return x < y
-
-
-@meta()
-def lesser_than_eq(x, y, **kwargs):
-    '''
-    The <= operator of Lisp. Says if something is less than or equal something else.
-
-    (<= <x> <y>)
-    '''
-    return x <= y
-
-
-@meta([
-    (1, { 'evaluate': False }),
-    (2, { 'evaluate': False }),
-])
-def _if(predicate, consequent, alternative=None, scope={}):
-    '''
-    The if operator of Lisp. Evaluates a predicate, and if it's true evaluates
-    a consequent or an alternative otherwise.
-
-    (if <predicate> <consequent> <alternative>)
-    (if <predicate> <consequent>)
-    '''
-    if predicate:
-        return runtime.eval(consequent, scope)
-    elif alternative is not None:
-        return runtime.eval(alternative, scope)
-    else:
-        return None
-
-
-@meta([
-    (0, { 'evaluate': False }),
-    (1, { 'evaluate': False })
-])
-def _lambda(args, body, scope):
-    '''
-    The lambda operator of Lisp. Defines a lambda function with args and a body.
-
-    (lambda (<x> <y> ...) <body>)
-    '''
-    arg_names = list(map(lambda x: x.value, args.value))
-    
-    @meta()
-    def f(*args, **kwargs):
-        if len(arg_names) != len(args):
-            raise RuntimeError('expected %d args, received %d' % (len(arg_names), len(args)))
-        
-        local = dict(zip(arg_names, args))
-        return runtime.eval(body, scope=kwargs['scope'] + local)
-    
-    return f
-
-
-# The initial scope, with the main operators.
-# To define new operators, define a function with
-# the @meta decorator.
-scope = {
-    'define': define,
-    '+': sum,
-    '-': sub,
-    '*': mul,
-    '/': div,
-    '>': greater_than,
-    '>=': greater_than_eq,
-    '=': eq,
-    '<': lesser_than,
-    '<=': lesser_than_eq,
-    'if': _if,
-    'lambda': _lambda
-}
-
-runtime = VM(scope)
+        if self.eval(predicate, scope):
+            return self.eval(affirmative, scope)
+        else:
+            return self.eval(negative, scope)
 
 
 def print_help():
@@ -661,6 +435,12 @@ def print_help():
     -n - does not evaluate
     -h - print help
     ''')
+
+
+def get_core_module():
+    tokens = Tokenizer(open('core.lisp').read()).tokenize()
+
+    return Parser(tokens).parse()
 
 
 def main(argv):
@@ -698,11 +478,11 @@ def main(argv):
     if print_ast:
         print(json.dumps(ast.serialize(), indent=4))
 
-    runtime.print_i = print_iterations
-    if evaluate:
-        runtime.eval(ast)
-        print(runtime.current_runtime_value)
+    runtime = RT()
 
+    if evaluate:
+        runtime.eval(get_core_module())
+        runtime.eval(ast)
 
 
 if __name__ == '__main__':
